@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+
+{% block title %}{% if order %}Редактировать{% else %}Новый{% endif %} заказ{% endblock %}
+
+{% block content %}
+<h1>{% if order %}Редактировать заказ #{{ order.id }}{% else %}Создать новый заказ{% endif %}</h1>
+
+<form method="POST" enctype="multipart/form-data">
+    <!-- Выбор клиента -->
+    <div class="mb-3">
+        <label for="client_id" class="form-label">Клиент *</label>
+        <select name="client_id" id="client_id" class="form-select" required>
+            <option value="">-- Выберите клиента --</option>
+            {% for client in clients %}
+            <option value="{{ client.id }}" {% if order and order.client_id == client.id %}selected{% endif %}>
+                {{ client.name }}
+            </option>
+            {% endfor %}
+        </select>
+    </div>
+
+    <!-- Название модели -->
+    <div class="mb-3">
+        <label for="model_name" class="form-label">Название модели *</label>
+        <input type="text" class="form-control" id="model_name" name="model_name" value="{{ order.model_name if order else '' }}" required>
+    </div>
+
+    <!-- Материал -->
+    <div class="mb-3">
+        <label for="material_id" class="form-label">Материал *</label>
+        <select name="material_id" id="material_id" class="form-select" required>
+            <option value="">-- Выберите материал --</option>
+            {% for material in materials %}
+            <option value="{{ material.id }}" data-price="{{ material.price_per_gram }}"
+                    {% if order and order.material_id == material.id %}selected{% endif %}>
+                {{ material.name }} ({{ material.price_per_gram }} руб/г)
+            </option>
+            {% endfor %}
+        </select>
+    </div>
+
+    <!-- Вес -->
+    <div class="mb-3">
+        <label for="weight" class="form-label">Вес (граммы) *</label>
+        <input type="number" step="0.01" class="form-control" id="weight" name="weight" value="{{ order.weight if order else '' }}">
+    </div>
+
+    <!-- Расчётная цена (только для чтения) -->
+    <div class="mb-3">
+        <label class="form-label">Ориентировочная цена</label>
+        <input type="text" class="form-control" id="calculated_price" readonly value="{% if order %}{{ order.total_price }} руб.{% endif %}">
+    </div>
+
+    <!-- Статус -->
+    <div class="mb-3">
+        <label for="status" class="form-label">Статус</label>
+        <select name="status" id="status" class="form-select">
+            <option value="new" {% if order and order.status == 'new' %}selected{% endif %}>Новый</option>
+            <option value="printing" {% if order and order.status == 'printing' %}selected{% endif %}>В печати</option>
+            <option value="ready" {% if order and order.status == 'ready' %}selected{% endif %}>Готов</option>
+            <option value="delivered" {% if order and order.status == 'delivered' %}selected{% endif %}>Выдан</option>
+        </select>
+    </div>
+
+    <!-- Загрузка файла -->
+    <div class="mb-3">
+        <label for="model_file" class="form-label">Файл модели (STL/OBJ)</label>
+        <input type="file" class="form-control" id="model_file" name="model_file" accept=".stl,.obj">
+        {% if order and order.file_path %}
+        <p class="mt-2">
+            Текущий файл: <a href="{{ url_for('download_file', filename=order.file_path) }}">{{ order.file_path }}</a>
+        </p>
+        {% endif %}
+    </div>
+
+<button type="submit" class="btn btn-success">Сохранить</button>
+<a href="{{ url_for('index') }}" class="btn btn-secondary">Отмена</a>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Дополнительный скрипт для начальной загрузки цены (если редактируем)
+    document.addEventListener('DOMContentLoaded', function () {
+        // Если есть начальное значение цены (при редактировании), можно ничего не делать,
+        // потому что мы уже вывели её в поле. Но можно вызвать обновление для красоты.
+        const materialSelect = document.getElementById('material_id');
+        const weightInput = document.getElementById('weight');
+        if (materialSelect.value && weightInput.value) {
+            // Триггерим событие change, чтобы сработал calc.js
+            materialSelect.dispatchEvent(new Event('change'));
+        }
+    });
+</script>
+{% endblock %}
