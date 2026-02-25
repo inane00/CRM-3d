@@ -42,6 +42,13 @@
             </td>
             <td>{{ order.date_created.strftime('%d.%m.%Y') }}</td>
             <td>
+                {% if order.file_path %}
+                <a href="{{ url_for('download_file', filename=order.file_path) }}" class="btn btn-sm btn-info" download>📥 Скачать</a>
+                {% else %}
+                —
+                {% endif %}
+            </td>
+            <td>
                 <a href="{{ url_for('edit_order', id=order.id) }}" class="btn btn-sm btn-warning">✏️</a>
                 <a href="{{ url_for('delete_order', id=order.id) }}" class="btn btn-sm btn-danger" onclick="return confirm('Вы уверены?')">🗑️</a>
             </td>

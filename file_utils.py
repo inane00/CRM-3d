@@ -9,8 +9,7 @@ ALLOWED_EXTENSIONS = {'stl', 'obj'}
 
 def allowed_file(filename):
     # Проверяет, имеет ли файл допустимое расширение.
-    return '.' in filename and \
-           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def get_unique_filename(filename):
     # Генерирует уникальное имя файла, добавляя временную метку.
@@ -23,25 +22,21 @@ def get_unique_filename(filename):
 def save_uploaded_file(file):
     """
     Сохраняет загруженный файл в папку UPLOAD_FOLDER.
-    Возвращает относительный путь к файлу (например, 'uploads/имя_файла.ext')
+    Возвращает только имя файла (например, 'имя_файла.ext')
     или None в случае ошибки.
     """
     if file and allowed_file(file.filename):
-        # Генерируем безопасное уникальное имя
         filename = get_unique_filename(file.filename)
-        # Формируем полный путь для сохранения
         upload_folder = current_app.config['UPLOAD_FOLDER']
         file_path = os.path.join(upload_folder, filename)
-        # Сохраняем файл
         file.save(file_path)
-        # Возвращаем путь относительно корня приложения (для хранения в БД)
-        return os.path.join('uploads', filename)
+        return filename  # возвращаем только имя файла
     return None
 
 def delete_file(file_path):
-    """Удаляет файл по относительному пути (если существует)."""
+    """Удаляет файл по имени из папки UPLOAD_FOLDER."""
     if file_path:
-        full_path = os.path.join(current_app.root_path, file_path)
+        full_path = os.path.join(current_app.config['UPLOAD_FOLDER'], file_path)
         if os.path.exists(full_path):
             os.remove(full_path)
             return True

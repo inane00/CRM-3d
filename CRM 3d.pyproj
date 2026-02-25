@@ -36,6 +36,7 @@
   </ItemGroup>
   <ItemGroup>
     <Content Include="requirements.txt" />
+    <Content Include="static\css\style.css" />
     <Content Include="static\js\calc.js" />
     <Content Include="templates\client_list.html" />
     <Content Include="templates\order_form.html" />

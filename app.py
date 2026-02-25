@@ -115,13 +115,13 @@ def delete_client(id):
 @app.route('/order/new', methods=['GET', 'POST'])
 def new_order():
     if request.method == 'POST':
-        # Получаем данные из формы
+        # Получаем данные формы
         client_id = request.form['client_id']
         model_name = request.form['model_name']
         material_id = request.form['material_id']
         status = request.form['status']
-        
-        # Получаем вес из формы (может быть пустой строкой)
+
+        # Обработка веса из формы
         weight_str = request.form.get('weight', '')
         weight = None
         if weight_str:
@@ -129,38 +129,47 @@ def new_order():
                 weight = float(weight_str)
             except ValueError:
                 flash('Некорректное значение веса', 'danger')
-        # вернуть форму
+                # Возвращаем форму с уже введёнными данными
+                clients = Client.query.all()
+                materials = Material.query.all()
+                return render_template('order_form.html', order=None, clients=clients, materials=materials)
 
         # Обработка файла
         file = request.files.get('model_file')
         file_path = None
         if file and file.filename:
             if allowed_file(file.filename):
-                file_path = save_uploaded_file(file)
+                file_path = save_uploaded_file(file)  # теперь это только имя
                 if not file_path:
                     flash('Ошибка при сохранении файла.', 'danger')
-                    # Можно вернуть форму с заполненными данными
             else:
                 flash('Недопустимый тип файла. Разрешены только STL и OBJ.', 'danger')
-                # Вернуть форму
-        
-        # Если загружен файл, пробуем вычислить вес
+                clients = Client.query.all()
+                materials = Material.query.all()
+                return render_template('order_form.html', order=None, clients=clients, materials=materials)
+
+        # Если загружен STL, пытаемся вычислить вес (перезаписываем weight)
         if file_path and file_path.lower().endswith('.stl'):
-            full_path = os.path.join(app.root_path, file_path)
+            full_path = os.path.join(app.config['UPLOAD_FOLDER'], file_path)  # правильный путь
             calculated_weight = get_weight_from_stl(full_path)
             if calculated_weight:
                 weight = calculated_weight
                 flash(f'Вес автоматически рассчитан: {weight} г', 'info')
 
-        # Если вес всё ещё не определён — ошибка
+        # Проверка, что вес определён
         if weight is None:
             flash('Необходимо указать вес или загрузить STL-файл для авторасчёта', 'danger')
-            # вернуть форму    
+            clients = Client.query.all()
+            materials = Material.query.all()
+            return render_template('order_form.html', order=None, clients=clients, materials=materials)
 
-        # Рассчитываем цену: находим материал по id, умножаем цену на вес
-        material = Material.query.get(material_id)
+        # Получаем материал и рассчитываем цену
+        material = db.session.get(Material, material_id)
+        if not material:
+            flash('Материал не найден', 'danger')
+            return redirect(url_for('new_order'))
         total_price = weight * material.price_per_gram
-        
+
         # Создаём заказ
         order = Order(
             client_id=client_id,
@@ -173,25 +182,16 @@ def new_order():
         )
         db.session.add(order)
         db.session.commit()
-        # Если файл STL и нужно автоматически рассчитать вес
-        if file_path and file_path.lower().endswith('.stl'):
-            full_path = os.path.join(app.root_path, file_path)
-            calculated_weight = get_weight_from_stl(full_path)
-            if calculated_weight:
-                order.weight = calculated_weight
-                # Пересчитать цену
-                material = Material.query.get(order.material_id)
-                order.total_price = calculated_weight * material.price_per_gram
-                db.session.commit()
-                flash(f'Вес автоматически рассчитан: {calculated_weight} г', 'info')
 
-        flash('Заказ создан', 'success')
-        return redirect(url_for('index'))
+        # Отладочная информация (можно удалить)
         print(f"FILE: {file.filename if file else 'None'}")
         print(f"FILE_PATH: {file_path}")
         print(f"WEIGHT: {weight}")
-    
-    # GET: передаём списки клиентов и материалов для выпадающих списков
+
+        flash('Заказ создан', 'success')
+        return redirect(url_for('index'))
+
+    # GET-запрос
     clients = Client.query.all()
     materials = Material.query.all()
     return render_template('order_form.html', order=None, clients=clients, materials=materials)
@@ -211,16 +211,12 @@ def edit_order(id):
         file = request.files.get('model_file')
         if file and file.filename:
             if allowed_file(file.filename):
-                # Удаляем старый файл, если есть
                 if order.file_path:
-                    delete_file(order.file_path)
-                # Сохраняем новый
-                new_path = save_uploaded_file(file)
+                    delete_file(order.file_path)  # удаляем старый файл
+                new_path = save_uploaded_file(file)  # новое имя
                 order.file_path = new_path
-                
-                # Пересчёт веса для STL
-                if new_path.lower().endswith('.stl'):
-                    full_path = os.path.join(app.root_path, new_path)
+                if new_path and new_path.lower().endswith('.stl'):
+                    full_path = os.path.join(app.config['UPLOAD_FOLDER'], new_path)
                     calculated_weight = get_weight_from_stl(full_path)
                     if calculated_weight:
                         order.weight = calculated_weight
@@ -228,7 +224,7 @@ def edit_order(id):
                 flash('Недопустимый тип файла. Файл не сохранён.', 'danger')
 
         # Пересчитываем цену
-        material = Material.query.get(order.material_id)
+        material = db.session.get(Material, order.material_id)
         order.total_price = order.weight * material.price_per_gram
         
         db.session.commit()
@@ -244,7 +240,7 @@ def edit_order(id):
 def delete_order(id):
     order = Order.query.get_or_404(id)
     if order.file_path:
-       delete_file(order.file_path)
+        delete_file(order.file_path)
     db.session.delete(order)
     db.session.commit()
     flash('Заказ удалён', 'warning')
@@ -261,7 +257,7 @@ def calculate_price():
     if not weight or not material_id:
         return jsonify({'error': 'Missing data'}), 400
     
-    material = Material.query.get(material_id)
+    material = db.session.get(Material, material_id)
     if not material:
         return jsonify({'error': 'Material not found'}), 404
     

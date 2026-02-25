@@ -5,7 +5,7 @@
 {% block content %}
 <h1>{% if order %}Редактировать заказ #{{ order.id }}{% else %}Создать новый заказ{% endif %}</h1>
 
-<form method="POST">
+<form method="POST" enctype="multipart/form-data">
     <!-- Выбор клиента -->
     <div class="mb-3">
         <label for="client_id" class="form-label">Клиент *</label>
@@ -68,7 +68,7 @@
         <input type="file" class="form-control" id="model_file" name="model_file" accept=".stl,.obj">
         {% if order and order.file_path %}
         <p class="mt-2">
-            Текущий файл: <a href="{{ url_for('download_file', filename=order.file_path) }}">{{ order.file_path.split('/')[-1] }}</a>
+            Текущий файл: <a href="{{ url_for('download_file', filename=order.file_path) }}">{{ order.file_path }}</a>
         </p>
         {% endif %}
     </div>
