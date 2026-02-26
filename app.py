@@ -1,14 +1,12 @@
 # app.py
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
-from models import db, Client, Material, Order, OrderLog 
+from models import db, Client, Material, Order
 from flask import Flask
 from flask_admin import Admin
-from admin import register_admin_views
 from flask_admin.contrib.sqla import ModelView
 import os
 from file_utils import save_uploaded_file, delete_file, get_weight_from_stl, allowed_file
 from flask import send_from_directory, abort
-from log_utils import log_order_creation, log_order_update, log_order_deletion
 
 
 # Создаём экземпляр Flask-приложения
@@ -26,10 +24,6 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # Инициализируем БД с нашим приложением
 db.init_app(app)
-
-# Админ-панель
-admin = Admin(app, name='CRM Admin')
-register_admin_views(admin)
 
 app.config['UPLOAD_FOLDER'] = os.path.join(app.root_path, 'uploads') # Настройка пути к папке 'uploads'
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # Ограничение максимального размера файла (16 MB)
@@ -187,8 +181,6 @@ def new_order():
             status=status
         )
         db.session.add(order)
-        db.session.flush()  
-        log_order_creation(order)
         db.session.commit()
 
         # Отладочная информация (можно удалить)
@@ -208,14 +200,6 @@ def new_order():
 @app.route('/order/<int:id>/edit', methods=['GET', 'POST'])
 def edit_order(id):
     order = Order.query.get_or_404(id)
-    old_data = {
-    'client_id': order.client_id,
-    'model_name': order.model_name,
-    'material_id': order.material_id,
-    'weight': order.weight,
-    'status': order.status,
-    'file_path': order.file_path
-    }
     if request.method == 'POST':
         order.client_id = request.form['client_id']
         order.model_name = request.form['model_name']
@@ -242,20 +226,7 @@ def edit_order(id):
         # Пересчитываем цену
         material = db.session.get(Material, order.material_id)
         order.total_price = order.weight * material.price_per_gram
-
-            # Формируем новые значения
-        new_data = {
-            'client_id': order.client_id,
-            'model_name': order.model_name,
-            'material_id': order.material_id,
-            'weight': order.weight,
-            'status': order.status,
-            'file_path': order.file_path
-        }
-
-        # Логируем изменения
-        log_order_update(order, old_data, new_data)
-                
+        
         db.session.commit()
         flash('Заказ обновлён', 'success')
         return redirect(url_for('index'))
@@ -267,17 +238,11 @@ def edit_order(id):
 # Удаление заказа
 @app.route('/order/<int:id>/delete')
 def delete_order(id):
-    order = db.session.get(Order, id)
-    if not order:
-        abort(404)
-    log_order_deletion(order)
+    order = Order.query.get_or_404(id)
     if order.file_path:
         delete_file(order.file_path)
-    
-    # Удаляем заказ из БД
     db.session.delete(order)
     db.session.commit()
-    
     flash('Заказ удалён', 'warning')
     return redirect(url_for('index'))
 
@@ -307,13 +272,11 @@ def download_file(filename):
     # Здесь можно добавить проверку прав доступа (например, только для авторизованных)
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename, as_attachment=True)
 
-@app.route('/order/<int:id>/logs')
-def order_logs(id):
-    order = db.session.get(Order, id)
-    if not order:
-        abort(404)
-    logs = OrderLog.query.filter_by(order_id=id).order_by(OrderLog.timestamp.desc()).all()
-    return render_template('order_logs.html', order=order, logs=logs)
+# Админ-панель
+admin = Admin(app, name='CRM Admin')
+admin.add_view(ModelView(Client, db.session))
+admin.add_view(ModelView(Order, db.session))
+admin.add_view(ModelView(Material, db.session))
 
 # Запуск приложения (только при прямом вызове скрипта)
 if __name__ == '__main__':

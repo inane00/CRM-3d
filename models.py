@@ -41,17 +41,3 @@ class Order(db.Model):
     # Явные двунаправленные связи
     client = db.relationship('Client', back_populates='orders')
     material = db.relationship('Material', back_populates='orders')
-
-class OrderLog(db.Model):
-    __tablename__ = 'order_logs'
-    
-    id = db.Column(db.Integer, primary_key=True)
-    order_id = db.Column(db.Integer, db.ForeignKey('orders.id'), nullable=False)
-    field_name = db.Column(db.String(50))        # название изменённого поля
-    old_value = db.Column(db.String(500))        # старое значение (в виде строки)
-    new_value = db.Column(db.String(500))        # новое значение
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-    # user_id можно добавить позже, когда будет аутентификация
-    
-    # связь с заказом
-    order = db.relationship('Order', backref='logs')
