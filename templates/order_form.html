@@ -1,100 +1,331 @@
 {% extends "base.html" %}
 
-{% block title %}{% if order %}Редактировать{% else %}Новый{% endif %} заказ{% endblock %}
+{% block title %}{% if order %}Редактировать заказ #{{ order.id }}{% else %}Создать новый заказ{% endif %}{% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center">
-    <h1>{% if order %}Редактировать заказ #{{ order.id }}{% else %}Создать новый заказ{% endif %}</h1>
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1>{% if order %}✏️ Редактировать заказ #{{ order.id }}{% else %}➕ Создать новый заказ{% endif %}</h1>
     {% if order %}
-    <a href="{{ url_for('order_logs', id=order.id) }}" class="btn btn-info">📜 История изменений</a>
+    <a href="{{ url_for('order_logs', id=order.id) }}" class="btn btn-info">📜 История</a>
     {% endif %}
 </div>
 
-<form method="POST" enctype="multipart/form-data">
-    <!-- Выбор клиента -->
-    <div class="mb-3">
-        <label for="client_id" class="form-label">Клиент *</label>
-        <select name="client_id" id="client_id" class="form-select" required>
-            <option value="">-- Выберите клиента --</option>
-            {% for client in clients %}
-            <option value="{{ client.id }}" {% if order and order.client_id == client.id %}selected{% endif %}>
-                {{ client.name }}
-            </option>
-            {% endfor %}
-        </select>
-    </div>
+<div class="row">
+    <div class="col-md-8">
+        <form method="POST" enctype="multipart/form-data" id="orderForm">
+            <!-- Клиент -->
+            <div class="card mb-3">
+                <div class="card-header bg-primary text-white">
+                    <i class="bi bi-person"></i> Клиент
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-9">
+                            <label for="client_id" class="form-label">Выберите клиента</label>
+                            <select class="form-select select2-client" id="client_id" name="client_id" required>
+                                <option value="">— Поиск или выбор —</option>
+                                {% for client in clients %}
+                                <option value="{{ client.id }}" {% if order and order.client_id == client.id %}selected{% endif %}>
+                                    {{ client.name }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-3 d-flex align-items-end">
+                            <button type="button" class="btn btn-success w-100" data-bs-toggle="modal" data-bs-target="#newClientModal">
+                                <i class="bi bi-plus-circle"></i> Новый клиент
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
 
-    <!-- Название модели -->
-    <div class="mb-3">
-        <label for="model_name" class="form-label">Название модели *</label>
-        <input type="text" class="form-control" id="model_name" name="model_name" value="{{ order.model_name if order else '' }}" required>
-    </div>
+            <!-- Модель и файл -->
+            <div class="card mb-3">
+                <div class="card-header bg-info text-white">
+                    <i class="bi bi-cube"></i> Модель
+                </div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label for="model_name" class="form-label">Название модели</label>
+                        <input type="text" class="form-control" id="model_name" name="model_name" value="{{ order.model_name if order else '' }}" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="model_file" class="form-label">Файл модели (STL/OBJ)</label>
+                        <input type="file" class="form-control" id="model_file" name="model_file" accept=".stl,.obj">
+                        {% if order and order.file_path %}
+                        <p class="mt-2">
+                            Текущий файл: <a href="{{ url_for('download_file', filename=order.file_path) }}" target="_blank">{{ order.file_path }}</a>
+                        </p>
+                        {% endif %}
+                        <div id="fileProgress" class="progress mt-2 d-none">
+                            <div class="progress-bar progress-bar-striped progress-bar-animated" style="width: 100%">Анализ файла...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
 
-    <!-- Материал -->
-    <div class="mb-3">
-        <label for="material_id" class="form-label">Материал *</label>
-        <select name="material_id" id="material_id" class="form-select" required>
-            <option value="">-- Выберите материал --</option>
-            {% for material in materials %}
-            <option value="{{ material.id }}" data-price="{{ material.price_per_gram }}"
-                    {% if order and order.material_id == material.id %}selected{% endif %}>
-                {{ material.name }} ({{ material.price_per_gram }} руб/г)
-            </option>
-            {% endfor %}
-        </select>
-    </div>
+            <!-- Параметры печати -->
+            <div class="card mb-3">
+                <div class="card-header bg-warning text-dark">
+                    <i class="bi bi-gear"></i> Параметры печати
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="material_id" class="form-label">Материал</label>
+                            <select class="form-select" id="material_id" name="material_id" required>
+                                <option value="">— Выберите материал —</option>
+                                {% for material in materials %}
+                                <option value="{{ material.id }}" data-price="{{ material.price_per_gram }}" {% if order and order.material_id == material.id %}selected{% endif %}>
+                                    {{ material.name }} ({{ material.price_per_gram }} руб/г)
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label for="weight" class="form-label">Вес (граммы)</label>
+                            <input type="number" step="0.01" class="form-control" id="weight" name="weight" value="{{ order.weight if order else '' }}" required>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="status" class="form-label">Статус</label>
+                            <select class="form-select" id="status" name="status">
+                                <option value="new" {% if order and order.status == 'new' %}selected{% endif %}>🆕 Новый</option>
+                                <option value="printing" {% if order and order.status == 'printing' %}selected{% endif %}>🖨️ В печати</option>
+                                <option value="ready" {% if order and order.status == 'ready' %}selected{% endif %}>✅ Готов</option>
+                                <option value="delivered" {% if order and order.status == 'delivered' %}selected{% endif %}>📦 Выдан</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Итоговая цена</label>
+                            <div class="input-group">
+                                <span class="input-group-text">💰</span>
+                                <input type="text" class="form-control" id="calculated_price" readonly value="{% if order %}{{ order.total_price }}{% endif %}">
+                                <span class="input-group-text">руб.</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
 
-    <!-- Вес -->
-    <div class="mb-3">
-        <label for="weight" class="form-label">Вес (граммы) *</label>
-        <input type="number" step="0.01" class="form-control" id="weight" name="weight" value="{{ order.weight if order else '' }}">
+            <!-- Кнопки -->
+            <div class="d-flex justify-content-between">
+                <button type="submit" class="btn btn-success btn-lg">
+                    <i class="bi bi-check-circle"></i> Сохранить
+                </button>
+                <a href="{{ url_for('index') }}" class="btn btn-outline-secondary btn-lg">
+                    <i class="bi bi-x-circle"></i> Отмена
+                </a>
+            </div>
+        </form>
     </div>
-
-    <!-- Расчётная цена (только для чтения) -->
-    <div class="mb-3">
-        <label class="form-label">Ориентировочная цена</label>
-        <input type="text" class="form-control" id="calculated_price" readonly value="{% if order %}{{ order.total_price }} руб.{% endif %}">
+    <!-- Боковая панель с подсказками (можно оставить пустой или добавить информацию) -->
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header bg-light">
+                ℹ️ Подсказка
+            </div>
+            <div class="card-body">
+                <p>Загрузите STL-файл, чтобы автоматически рассчитать вес.</p>
+                <p>Цена пересчитывается при изменении материала или веса.</p>
+                <p>Можно быстро добавить нового клиента через кнопку.</p>
+            </div>
+        </div>
     </div>
+</div>
 
-    <!-- Статус -->
-    <div class="mb-3">
-        <label for="status" class="form-label">Статус</label>
-        <select name="status" id="status" class="form-select">
-            <option value="new" {% if order and order.status == 'new' %}selected{% endif %}>Новый</option>
-            <option value="printing" {% if order and order.status == 'printing' %}selected{% endif %}>В печати</option>
-            <option value="ready" {% if order and order.status == 'ready' %}selected{% endif %}>Готов</option>
-            <option value="delivered" {% if order and order.status == 'delivered' %}selected{% endif %}>Выдан</option>
-        </select>
+<!-- Модальное окно создания клиента -->
+<div class="modal fade" id="newClientModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">➕ Новый клиент</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form id="newClientForm">
+                    <div class="mb-3">
+                        <label for="clientName" class="form-label">Имя *</label>
+                        <input type="text" class="form-control" id="clientName" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="clientPhone" class="form-label">Телефон</label>
+                        <input type="text" class="form-control" id="clientPhone">
+                    </div>
+                    <div class="mb-3">
+                        <label for="clientEmail" class="form-label">Email</label>
+                        <input type="email" class="form-control" id="clientEmail">
+                    </div>
+                    <div class="mb-3">
+                        <label for="clientTelegram" class="form-label">Telegram</label>
+                        <input type="text" class="form-control" id="clientTelegram">
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+                <button type="button" class="btn btn-primary" id="saveNewClient">Сохранить</button>
+            </div>
+        </div>
     </div>
-
-    <!-- Загрузка файла -->
-    <div class="mb-3">
-        <label for="model_file" class="form-label">Файл модели (STL/OBJ)</label>
-        <input type="file" class="form-control" id="model_file" name="model_file" accept=".stl,.obj">
-        {% if order and order.file_path %}
-        <p class="mt-2">
-            Текущий файл: <a href="{{ url_for('download_file', filename=order.file_path) }}">{{ order.file_path }}</a>
-        </p>
-        {% endif %}
-    </div>
-
-    <button type="submit" class="btn btn-success">Сохранить</button>
-    <a href="{{ url_for('index') }}" class="btn btn-secondary">Отмена</a>
-</form>
+</div>
 {% endblock %}
 
 {% block scripts %}
+{{ super() }}
 <script>
-    // Дополнительный скрипт для начальной загрузки цены (если редактируем)
-    document.addEventListener('DOMContentLoaded', function () {
-        // Если есть начальное значение цены (при редактировании), можно ничего не делать,
-        // потому что мы уже вывели её в поле. Но можно вызвать обновление для красоты.
-        const materialSelect = document.getElementById('material_id');
-        const weightInput = document.getElementById('weight');
-        if (materialSelect.value && weightInput.value) {
-            // Триггерим событие change, чтобы сработал calc.js
-            materialSelect.dispatchEvent(new Event('change'));
-        }
+$(document).ready(function() {
+    // Функции форматирования для Select2 (определяем заранее)
+    function formatClientResult(client) {
+        if (client.loading) return client.text;
+
+        var $container = $(
+            '<div class="client-result">' +
+            '<strong>' + client.name + '</strong><br>' +
+            '<small>' +
+            (client.phone ? '📞 ' + client.phone + ' ' : '') +
+            (client.email ? '✉️ ' + client.email + ' ' : '') +
+            (client.telegram ? '📱 ' + client.telegram : '') +
+            '</small>' +
+            '</div>'
+        );
+        return $container;
+    }
+
+    function formatClientSelection(client) {
+        return client.name || client.text;
+    }
+
+    // Инициализация Select2
+    $('.select2-client').select2({
+        theme: 'bootstrap-5',
+        placeholder: 'Начните вводить имя, телефон или email...',
+        allowClear: true,
+        minimumInputLength: 1,
+        ajax: {
+            url: '{{ url_for("api_search_clients") }}',
+            dataType: 'json',
+            delay: 250,
+            data: function(params) {
+                return { q: params.term };
+            },
+            processResults: function(data) {
+                return { results: data };
+            },
+            cache: true
+        },
+        templateResult: formatClientResult,
+        templateSelection: formatClientSelection
     });
+
+    // Предзагрузка клиента при редактировании
+    {% if order and order.client_id %}
+        var clientName = "{{ order.client.name }}";
+        var clientId = {{ order.client_id }};
+        var option = new Option(clientName, clientId, true, true);
+        $('.select2-client').append(option).trigger('change');
+    {% endif %}
+
+    // Обработка загрузки файла
+    $('#model_file').on('change', function() {
+        var file = this.files[0];
+        if (!file) return;
+
+        var ext = file.name.split('.').pop().toLowerCase();
+        if (ext !== 'stl' && ext !== 'obj') {
+            alert('Пожалуйста, выберите файл STL или OBJ');
+            $(this).val('');
+            return;
+        }
+
+        var formData = new FormData();
+        formData.append('file', file);
+        var materialId = $('#material_id').val();
+
+        $('#fileProgress').removeClass('d-none');
+
+        $.ajax({
+            url: '{{ url_for("analyze_stl") }}',
+            type: 'POST',
+            data: formData,
+            processData: false,
+            contentType: false,
+            success: function(data) {
+                $('#fileProgress').addClass('d-none');
+                if (data.weight) {
+                    $('#weight').val(data.weight);
+                    if ($('#material_id').val()) {
+                        updatePrice();
+                    }
+                } else {
+                    alert('Не удалось рассчитать вес. Возможно, файл повреждён.');
+                }
+            },
+            error: function() {
+                $('#fileProgress').addClass('d-none');
+                alert('Ошибка при загрузке файла');
+            }
+        });
+    });
+
+    // Функция обновления цены
+    function updatePrice() {
+        var weight = $('#weight').val();
+        var materialId = $('#material_id').val();
+        if (!weight || !materialId) return;
+
+        $.get('{{ url_for("calculate_price") }}', { weight: weight, material_id: materialId })
+            .done(function(data) {
+                if (data.price) {
+                    $('#calculated_price').val(data.price.toFixed(2));
+                }
+            })
+            .fail(function() {
+                $('#calculated_price').val('Ошибка');
+            });
+    }
+
+    // Обновление цены при изменении материала или веса
+    $('#material_id').on('change', updatePrice);
+    $('#weight').on('input', updatePrice);
+
+    // Сохранение нового клиента из модального окна
+    $('#saveNewClient').on('click', function() {
+        var name = $('#clientName').val();
+        if (!name) {
+            alert('Введите имя клиента');
+            return;
+        }
+        var data = {
+            name: name,
+            phone: $('#clientPhone').val(),
+            email: $('#clientEmail').val(),
+            telegram: $('#clientTelegram').val()
+        };
+
+        $.ajax({
+            url: '{{ url_for("api_new_client") }}',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify(data),
+            success: function(client) {
+                var newOption = new Option(client.name, client.id, true, true);
+                $('.select2-client').append(newOption).trigger('change');
+                $('#newClientModal').modal('hide');
+                $('#newClientForm')[0].reset();
+            },
+            error: function(xhr) {
+                alert('Ошибка: ' + (xhr.responseJSON.error || 'Неизвестная ошибка'));
+            }
+        });
+    });
+
+    // Очистка формы модального окна при закрытии
+    $('#newClientModal').on('hidden.bs.modal', function() {
+        $('#newClientForm')[0].reset();
+    });
+});
 </script>
 {% endblock %}

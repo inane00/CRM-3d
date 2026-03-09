@@ -38,6 +38,8 @@
     <Content Include="requirements.txt" />
     <Content Include="static\css\style.css" />
     <Content Include="static\js\calc.js" />
+    <Content Include="templates\calculator.html" />
+    <Content Include="templates\calculator_settings.html" />
     <Content Include="templates\client_list.html" />
     <Content Include="templates\order_form.html" />
     <Content Include="templates\client_form.html" />

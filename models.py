@@ -55,3 +55,15 @@ class OrderLog(db.Model):
     
     # связь с заказом
     order = db.relationship('Order', backref='logs')
+
+
+class CalculatorSettings(db.Model):
+    __tablename__ = 'calculator_settings'
+    
+    id = db.Column(db.Integer, primary_key=True)  # всегда будет id=1
+    electricity_cost_per_kwh = db.Column(db.Float, default=5.0)  # стоимость электричества, руб/кВт*ч
+    printing_time_hours_per_gram = db.Column(db.Float, default=0.01)  # время печати 1 грамма (в часах)
+    tax_percent = db.Column(db.Float, default=4.0)  # налог, % от себестоимости
+    consumables_percent = db.Column(db.Float, default=5.0)  # расходники, % от себестоимости
+    depreciation_percent = db.Column(db.Float, default=10.0)  # амортизация, % от себестоимости
+    profit_percent = db.Column(db.Float, default=20.0)  # прибыль, % от себестоимости с налогом

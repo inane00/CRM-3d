@@ -1,7 +1,8 @@
 # app.py
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
-from models import db, Client, Material, Order, OrderLog 
+from models import db, Client, Material, Order, OrderLog, CalculatorSettings 
 from flask import Flask
+import tempfile
 from flask_admin import Admin
 from admin import register_admin_views
 from flask_admin.contrib.sqla import ModelView
@@ -9,6 +10,7 @@ import os
 from file_utils import save_uploaded_file, delete_file, get_weight_from_stl, allowed_file
 from flask import send_from_directory, abort
 from log_utils import log_order_creation, log_order_update, log_order_deletion
+from sqlalchemy import text
 
 
 # Создаём экземпляр Flask-приложения
@@ -114,6 +116,45 @@ def delete_client(id):
     db.session.commit()
     flash('Клиент удалён', 'warning')
     return redirect(url_for('client_list'))
+
+
+@app.route('/api/client/new', methods=['POST'])
+def api_new_client():
+    """Создание клиента через AJAX (возвращает JSON)."""
+    data = request.get_json()
+    name = data.get('name')
+    phone = data.get('phone')
+    email = data.get('email')
+    telegram = data.get('telegram')
+    if not name:
+        return jsonify({'error': 'Имя обязательно'}), 400
+    client = Client(name=name, phone=phone, email=email, telegram=telegram)
+    db.session.add(client)
+    db.session.commit()
+    return jsonify({'id': client.id, 'name': client.name})
+
+@app.route('/api/clients/search')
+def api_search_clients():
+    q = request.args.get('q', '').strip().lower()
+    if not q:
+        return jsonify([])
+    all_clients = Client.query.all()
+    filtered = []
+    for c in all_clients:
+        if (q in (c.name or '').lower() or
+            q in (c.phone or '').lower() or
+            q in (c.email or '').lower() or
+            q in (c.telegram or '').lower()):
+            filtered.append(c)
+    filtered = filtered[:20]
+    return jsonify([{
+        'id': c.id,
+        'text': f"{c.name} {c.phone or ''}",
+        'name': c.name,
+        'phone': c.phone,
+        'email': c.email,
+        'telegram': c.telegram
+    } for c in filtered])
 
 # --- Маршруты для заказов ---
 
@@ -300,6 +341,34 @@ def calculate_price():
     # Возвращаем JSON-ответ
     return jsonify({'price': round(price, 2)})
 
+@app.route('/analyze_stl', methods=['POST'])
+def analyze_stl():
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file'}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+    if not allowed_file(file.filename):
+        return jsonify({'error': 'Invalid file type'}), 400
+
+    suffix = os.path.splitext(file.filename)[1]
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        file.save(tmp.name)
+        tmp_path = tmp.name
+
+    try:
+        if suffix.lower() == '.stl':
+            weight = get_weight_from_stl(tmp_path)
+        else:
+            weight = None
+    finally:
+        os.unlink(tmp_path)
+
+    if weight is None:
+        return jsonify({'error': 'Could not calculate weight'}), 400
+
+    return jsonify({'weight': weight})
+
 # Маршрут для скачивания файлов
 @app.route('/uploads/<path:filename>')
 def download_file(filename):
@@ -314,6 +383,103 @@ def order_logs(id):
         abort(404)
     logs = OrderLog.query.filter_by(order_id=id).order_by(OrderLog.timestamp.desc()).all()
     return render_template('order_logs.html', order=order, logs=logs)
+
+# Маршрут для редактирования настроек
+@app.route('/calculator/settings', methods=['GET', 'POST'])
+def calculator_settings():
+    # Получаем или создаём настройки
+    settings = CalculatorSettings.query.get(1)
+    if not settings:
+        settings = CalculatorSettings(id=1)
+        db.session.add(settings)
+        db.session.commit()
+    
+    if request.method == 'POST':
+        settings.electricity_cost_per_kwh = float(request.form['electricity_cost_per_kwh'])
+        settings.printing_time_hours_per_gram = float(request.form['printing_time_hours_per_gram'])
+        settings.tax_percent = float(request.form['tax_percent'])
+        settings.consumables_percent = float(request.form['consumables_percent'])
+        settings.depreciation_percent = float(request.form['depreciation_percent'])
+        settings.profit_percent = float(request.form['profit_percent'])
+        db.session.commit()
+        flash('Настройки сохранены', 'success')
+        return redirect(url_for('calculator_settings'))
+    
+    return render_template('calculator_settings.html', settings=settings)
+
+
+@app.route('/calculator', methods=['GET', 'POST'])
+def calculator():
+    materials = Material.query.all()
+    settings = CalculatorSettings.query.get(1)
+    if not settings:
+        settings = CalculatorSettings(id=1)
+        db.session.add(settings)
+        db.session.commit()
+    
+    result = None
+    if request.method == 'POST':
+        material_id = int(request.form['material_id'])
+        weight = float(request.form['weight'])
+        material = db.session.get(Material, material_id)
+        
+        # Базовые затраты на пластик
+        plastic_cost = weight * material.price_per_gram
+        
+        # Затраты на электричество
+        electricity_cost = weight * settings.printing_time_hours_per_gram * settings.electricity_cost_per_kwh
+        
+        # Себестоимость без наценок
+        base_cost = plastic_cost + electricity_cost
+        
+        # Расходники и амортизация (проценты от base_cost)
+        consumables = base_cost * settings.consumables_percent / 100
+        depreciation = base_cost * settings.depreciation_percent / 100
+        
+        # Себестоимость с налогом
+        cost_with_tax = (base_cost + consumables + depreciation) * (1 + settings.tax_percent / 100)
+        
+        # Итоговая цена с прибылью
+        final_price = cost_with_tax * (1 + settings.profit_percent / 100)
+        
+        result = {
+            'plastic_cost': round(plastic_cost, 2),
+            'electricity_cost': round(electricity_cost, 2),
+            'consumables': round(consumables, 2),
+            'depreciation': round(depreciation, 2),
+            'tax': round(cost_with_tax - (base_cost + consumables + depreciation), 2),
+            'profit': round(final_price - cost_with_tax, 2),
+            'final_price': round(final_price, 2)
+        }
+    
+    return render_template('calculator.html', materials=materials, settings=settings, result=result)
+
+@app.route('/api/calculate_price', methods=['POST'])
+def api_calculate_price():
+    data = request.get_json()
+    material_id = data.get('material_id')
+    weight = data.get('weight')
+    
+    if not material_id or not weight:
+        return jsonify({'error': 'Missing data'}), 400
+    
+    material = db.session.get(Material, material_id)
+    if not material:
+        return jsonify({'error': 'Material not found'}), 404
+    
+    settings = CalculatorSettings.query.get(1)
+    if not settings:
+        return jsonify({'error': 'Settings not configured'}), 400
+    
+    plastic_cost = weight * material.price_per_gram
+    electricity_cost = weight * settings.printing_time_hours_per_gram * settings.electricity_cost_per_kwh
+    base_cost = plastic_cost + electricity_cost
+    consumables = base_cost * settings.consumables_percent / 100
+    depreciation = base_cost * settings.depreciation_percent / 100
+    cost_with_tax = (base_cost + consumables + depreciation) * (1 + settings.tax_percent / 100)
+    final_price = cost_with_tax * (1 + settings.profit_percent / 100)
+    
+    return jsonify({'price': round(final_price, 2)})
 
 # Запуск приложения (только при прямом вызове скрипта)
 if __name__ == '__main__':

@@ -50,3 +50,33 @@ document.addEventListener('DOMContentLoaded', function () {
     materialSelect.addEventListener('change', updatePrice);
     weightInput.addEventListener('input', updatePrice); // input срабатывает при каждом вводе
 });
+
+document.addEventListener('DOMContentLoaded', function () {
+    const calculateBtn = document.getElementById('calculate-price-btn');
+    if (calculateBtn) {
+        calculateBtn.addEventListener('click', function () {
+            const materialId = document.getElementById('material_id').value;
+            const weight = document.getElementById('weight').value;
+
+            if (!materialId || !weight) {
+                alert('Выберите материал и укажите вес');
+                return;
+            }
+
+            fetch('/api/calculate_price', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ material_id: materialId, weight: parseFloat(weight) })
+            })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.price) {
+                        document.getElementById('total_price').value = data.price;
+                    } else {
+                        alert('Ошибка расчёта');
+                    }
+                })
+                .catch(error => console.error('Error:', error));
+        });
+    }
+});

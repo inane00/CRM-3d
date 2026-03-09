@@ -363,3 +363,5 @@ MigrationBackup/
 FodyWeavers.xsd
 /uploads
 /static/favicon.ico
+/instance/crm.db
+/instance/crm.db
