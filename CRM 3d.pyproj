@@ -38,6 +38,7 @@
     <Content Include="requirements.txt" />
     <Content Include="static\css\style.css" />
     <Content Include="static\js\calc.js" />
+    <Content Include="templates\all_logs.html" />
     <Content Include="templates\calculator.html" />
     <Content Include="templates\calculator_settings.html" />
     <Content Include="templates\client_list.html" />
@@ -55,6 +56,7 @@
     <Compile Include="forms.py" />
     <Compile Include="log_utils.py" />
     <Compile Include="models.py" />
+    <Compile Include="pricing.py" />
   </ItemGroup>
   <ItemGroup>
     <Interpreter Include="env\">

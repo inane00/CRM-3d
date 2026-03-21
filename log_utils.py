@@ -29,12 +29,12 @@ def log_order_update(order, old_data, new_data):
             db.session.add(log)
 
 def log_order_deletion(order):
-    """Логирует удаление заказа."""
+    """Логирует удаление заказа с сохранением информации."""
     log = OrderLog(
-        order_id=order.id,
+        order_id=order.id,  # пока id ещё существует
         field_name='deleted',
         old_value='',
-        new_value='Заказ удалён'
+        new_value='Заказ удалён',
+        deleted_order_info=f"#{order.id} ({order.model_name})"  # сохраняем имя
     )
     db.session.add(log)
-    # Удаление произойдёт позже, но лог добавим до commit'а удаления

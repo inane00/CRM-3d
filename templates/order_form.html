@@ -110,6 +110,109 @@
                 </div>
             </div>
 
+            <!-- Дополнительные услуги -->
+            <div class="card mb-3">
+                <div class="card-header bg-secondary text-white">
+                    <i class="bi bi-brush"></i> Дополнительные услуги
+                </div>
+                <div class="card-body" id="servicesContainer">
+                    {% if services_list %}
+                    {% for service in services_list %}
+                    <div class="service-item mb-3 p-2 border rounded" data-service-id="{{ service.id }}">
+                        <div class="form-check">
+                            <input class="form-check-input service-checkbox" type="checkbox" id="service_{{ service.id }}"
+                                   data-service-id="{{ service.id }}"
+                                   data-calculation-type="{{ service.calculation_type }}"
+                                   data-default-value="{{ service.value }}"
+                                   {% if order and order_services and service.id in order_services %}checked{% endif %}>
+                            <label class="form-check-label fw-bold" for="service_{{ service.id }}">
+                                {{ service.name }}
+                            </label>
+                            <span class="text-muted ms-2">{{ service.description }}</span>
+                        </div>
+                        <div class="service-options mt-2 ms-4" style="display: {% if order_services and service.id in order_services %}block{% else %}none{% endif %};">
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <label class="form-label small">Значение</label>
+                                    <input type="number" step="0.1" class="form-control form-control-sm service-value"
+                                           placeholder="Оставить пустым = по умолчанию ({{ service.value }})"
+                                           value="{{ order_services[service.id].custom_value if order_services and service.id in order_services else '' }}">
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label small">Способ расчёта</label>
+                                    <select class="form-select form-select-sm service-type-display" disabled>
+                                        {% if service.calculation_type == 'per_gram' %}
+                                        <option selected>руб/грамм</option>
+                                        {% elif service.calculation_type == 'percent' %}
+                                        <option selected>% от цены</option>
+                                        {% else %}
+                                        <option selected>фиксированная сумма</option>
+                                        {% endif %}
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="mt-2">
+                                <textarea class="form-control form-control-sm service-notes" rows="2"
+                                          placeholder="Примечание (например, сложность покраски)">{{ order_services[service.id].notes if order_services and service.id in order_services else '' }}</textarea>
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                    {% else %}
+                    <p class="text-muted">
+                        Нет доступных дополнительных услуг.
+                        <a href="{{ url_for('service_settings') }}" target="_blank">Добавить услуги</a>
+                    </p>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Индивидуальные настройки (опционально) -->
+            <div class="card mb-3">
+                <div class="card-header bg-dark text-white">
+                    <i class="bi bi-sliders2"></i> Индивидуальные настройки
+                </div>
+                <div class="card-body">
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" id="use_custom_settings" name="use_custom_settings"
+                               {% if order and order.use_custom_settings %}checked{% endif %}>
+                        <label class="form-check-label" for="use_custom_settings">
+                            🔧 Использовать индивидуальные настройки для этого заказа
+                        </label>
+                    </div>
+
+                    <div id="customSettingsBlock" style="display: {% if order and order.use_custom_settings %}block{% else %}none{% endif %};">
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label small">Налог (%)</label>
+                                <input type="number" step="0.1" class="form-control" id="custom_tax_percent" name="custom_tax_percent"
+                                       value="{{ order.custom_tax_percent if order else '' }}" placeholder="Оставить пустым = глобальный">
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label small">Прибыль (%)</label>
+                                <input type="number" step="0.1" class="form-control" id="custom_profit_percent" name="custom_profit_percent"
+                                       value="{{ order.custom_profit_percent if order else '' }}" placeholder="Оставить пустым = глобальный">
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label small">Расходники (%)</label>
+                                <input type="number" step="0.1" class="form-control" id="custom_consumables_percent" name="custom_consumables_percent"
+                                       value="{{ order.custom_consumables_percent if order else '' }}" placeholder="Оставить пустым = глобальный">
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label small">Амортизация (%)</label>
+                                <input type="number" step="0.1" class="form-control" id="custom_depreciation_percent" name="custom_depreciation_percent"
+                                       value="{{ order.custom_depreciation_percent if order else '' }}" placeholder="Оставить пустым = глобальный">
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label small">Стоимость электричества (руб/кВт*ч)</label>
+                                <input type="number" step="0.01" class="form-control" id="custom_electricity_cost" name="custom_electricity_cost"
+                                       value="{{ order.custom_electricity_cost if order else '' }}" placeholder="Оставить пустым = глобальный">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Кнопки -->
             <div class="d-flex justify-content-between">
                 <button type="submit" class="btn btn-success btn-lg">
@@ -270,21 +373,120 @@ $(document).ready(function() {
         });
     });
 
-    // Функция обновления цены
+    // Функция обновления цены с учётом всех параметров
     function updatePrice() {
         var weight = $('#weight').val();
         var materialId = $('#material_id').val();
         if (!weight || !materialId) return;
 
-        $.get('{{ url_for("calculate_price") }}', { weight: weight, material_id: materialId })
-            .done(function(data) {
-                if (data.price) {
-                    $('#calculated_price').val(data.price.toFixed(2));
+        var useCustom = $('#use_custom_settings').is(':checked');
+        var services = getSelectedServices();
+
+        var data = {
+            weight: parseFloat(weight),
+            material_id: parseInt(materialId),
+            use_custom: useCustom,
+            services: services
+        };
+
+        if (useCustom) {
+            // Передаём null для пустых полей
+            data.custom_tax_percent = $('#custom_tax_percent').val() ? parseFloat($('#custom_tax_percent').val()) : null;
+            data.custom_profit_percent = $('#custom_profit_percent').val() ? parseFloat($('#custom_profit_percent').val()) : null;
+            data.custom_consumables_percent = $('#custom_consumables_percent').val() ? parseFloat($('#custom_consumables_percent').val()) : null;
+            data.custom_depreciation_percent = $('#custom_depreciation_percent').val() ? parseFloat($('#custom_depreciation_percent').val()) : null;
+            data.custom_electricity_cost = $('#custom_electricity_cost').val() ? parseFloat($('#custom_electricity_cost').val()) : null;
+        }
+
+        $.ajax({
+            url: '{{ url_for("calculate_price_with_services") }}',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify(data),
+            success: function (response) {
+                if (response.price) {
+                    $('#calculated_price').val(response.price.toFixed(2));
+                    if (response.breakdown && response.breakdown.services) {
+                        showServicesBreakdown(response.breakdown.services);
+                    }
+                } else {
+                    $('#calculated_price').val('Ошибка');
                 }
-            })
-            .fail(function() {
+            },
+            error: function (xhr) {
+                console.error('Error:', xhr.responseText);
                 $('#calculated_price').val('Ошибка');
+            }
+        });
+    }
+
+    // Функция получения выбранных услуг
+    function getSelectedServices() {
+        var services = [];
+        $('.service-checkbox:checked').each(function () {
+            var $item = $(this).closest('.service-item');
+            var serviceId = $(this).data('service-id');
+            var customValue = $item.find('.service-value').val();
+            var notes = $item.find('.service-notes').val();
+
+            services.push({
+                service_id: serviceId,
+                custom_value: customValue ? parseFloat(customValue) : null,
+                notes: notes
             });
+        });
+        return services;
+    }
+
+    // Показ/скрытие блока индивидуальных настроек
+    $('#use_custom_settings').on('change', function () {
+        if ($(this).is(':checked')) {
+            $('#customSettingsBlock').slideDown();
+        } else {
+            $('#customSettingsBlock').slideUp();
+        }
+        updatePrice();
+    });
+
+    // Управление отображением опций услуги при выборе чекбокса
+    $('.service-checkbox').on('change', function () {
+        var $serviceItem = $(this).closest('.service-item');
+        var $options = $serviceItem.find('.service-options');
+        if ($(this).is(':checked')) {
+            $options.slideDown();
+        } else {
+            $options.slideUp();
+        }
+        updatePrice();
+        updateServicesInput();
+    });
+
+    // Обновление цены при изменении значений услуг
+    $('.service-value, .service-notes').on('change input', function () {
+        updatePrice();
+        updateServicesInput();
+    });
+
+    // Привязываем все события для обновления цены
+    $('#material_id, #weight, #custom_tax_percent, #custom_profit_percent, #custom_consumables_percent, #custom_depreciation_percent, #custom_electricity_cost').on('change input', updatePrice);
+
+    // Функция показа разбивки цены по услугам
+    function showServicesBreakdown(services) {
+        var $breakdownDiv = $('#servicesBreakdown');
+        if (!$breakdownDiv.length) {
+            $('<div id="servicesBreakdown" class="alert alert-info mt-2 small"></div>').insertAfter('#calculated_price');
+            $breakdownDiv = $('#servicesBreakdown');
+        }
+        if (services && services.length) {
+            var html = '<strong>Включая:</strong><ul>';
+            services.forEach(function (item) {
+                html += '<li>' + item.name + ': +' + item.amount.toFixed(2) + ' руб.</li>';
+            });
+            html += '</ul>';
+            $breakdownDiv.html(html).show();
+        } else {
+            $breakdownDiv.hide();
+        }
     }
 
     // Обновление цены при изменении материала или веса
@@ -326,6 +528,48 @@ $(document).ready(function() {
     $('#newClientModal').on('hidden.bs.modal', function() {
         $('#newClientForm')[0].reset();
     });
+
+    // При выборе услуги добавляем скрытое поле
+    function updateServicesInput() {
+        // Удаляем старые поля
+        $('input[name="service_ids"]').remove();
+
+        // Добавляем новые для выбранных услуг
+        $('.service-checkbox:checked').each(function () {
+            var serviceId = $(this).data('service-id');
+            var $item = $(this).closest('.service-item');
+            var customValue = $item.find('.service-value').val();
+            var notes = $item.find('.service-notes').val();
+
+            // Скрытое поле с ID услуги
+            $('<input>').attr({
+                type: 'hidden',
+                name: 'service_ids',
+                value: serviceId
+            }).appendTo('#orderForm');
+
+            // Скрытое поле с кастомным значением
+            if (customValue) {
+                $('<input>').attr({
+                    type: 'hidden',
+                    name: 'service_value_' + serviceId,
+                    value: customValue
+                }).appendTo('#orderForm');
+            }
+
+            // Скрытое поле с заметками
+            if (notes) {
+                $('<input>').attr({
+                    type: 'hidden',
+                    name: 'service_notes_' + serviceId,
+                    value: notes
+                }).appendTo('#orderForm');
+            }
+        });
+    }
+
+    // Вызывать при изменении чекбокса или значений
+    $('.service-checkbox, .service-value, .service-notes').on('change input', updateServicesInput);
 });
 </script>
 {% endblock %}

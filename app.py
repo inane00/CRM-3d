@@ -1,6 +1,6 @@
 # app.py
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
-from models import db, Client, Material, Order, OrderLog, CalculatorSettings 
+from models import db, Client, Material, Order, OrderLog, CalculatorSettings, ServiceParameter, OrderService 
 from flask import Flask
 import tempfile
 from flask_admin import Admin
@@ -8,9 +8,11 @@ from admin import register_admin_views
 from flask_admin.contrib.sqla import ModelView
 import os
 from file_utils import save_uploaded_file, delete_file, get_weight_from_stl, allowed_file
-from flask import send_from_directory, abort
+from flask import send_from_directory, abort, request
 from log_utils import log_order_creation, log_order_update, log_order_deletion
 from sqlalchemy import text
+from datetime import datetime, timedelta
+from pricing import calculate_final_price, calculate_price_breakdown
 
 
 # Создаём экземпляр Flask-приложения
@@ -167,6 +169,30 @@ def new_order():
         model_name = request.form['model_name']
         material_id = request.form['material_id']
         status = request.form['status']
+        
+        # Получаем индивидуальные настройки (если включены)
+        use_custom_settings = 'use_custom_settings' in request.form
+        custom_settings = None
+        if use_custom_settings:
+            custom_settings = {
+                'tax_percent': request.form.get('custom_tax_percent', type=float),
+                'profit_percent': request.form.get('custom_profit_percent', type=float),
+                'consumables_percent': request.form.get('custom_consumables_percent', type=float),
+                'depreciation_percent': request.form.get('custom_depreciation_percent', type=float),
+                'electricity_cost': request.form.get('custom_electricity_cost', type=float)
+            }
+        
+        # Получаем выбранные услуги
+        selected_services = []
+        service_ids = request.form.getlist('service_ids')  # скрытые поля с ID выбранных услуг
+        for service_id in service_ids:
+            custom_value = request.form.get(f'service_value_{service_id}', type=float)
+            notes = request.form.get(f'service_notes_{service_id}', '')
+            selected_services.append({
+                'service_id': int(service_id),
+                'custom_value': custom_value,
+                'notes': notes
+            })
 
         # Обработка веса из формы
         weight_str = request.form.get('weight', '')
@@ -176,28 +202,31 @@ def new_order():
                 weight = float(weight_str)
             except ValueError:
                 flash('Некорректное значение веса', 'danger')
-                # Возвращаем форму с уже введёнными данными
                 clients = Client.query.all()
                 materials = Material.query.all()
-                return render_template('order_form.html', order=None, clients=clients, materials=materials)
+                services_list = ServiceParameter.query.filter_by(is_active=True).all()
+                return render_template('order_form.html', order=None, clients=clients, 
+                                      materials=materials, services_list=services_list)
 
         # Обработка файла
         file = request.files.get('model_file')
         file_path = None
         if file and file.filename:
             if allowed_file(file.filename):
-                file_path = save_uploaded_file(file)  # теперь это только имя
+                file_path = save_uploaded_file(file)
                 if not file_path:
                     flash('Ошибка при сохранении файла.', 'danger')
             else:
                 flash('Недопустимый тип файла. Разрешены только STL и OBJ.', 'danger')
                 clients = Client.query.all()
                 materials = Material.query.all()
-                return render_template('order_form.html', order=None, clients=clients, materials=materials)
+                services_list = ServiceParameter.query.filter_by(is_active=True).all()
+                return render_template('order_form.html', order=None, clients=clients, 
+                                      materials=materials, services_list=services_list)
 
         # Если загружен STL, пытаемся вычислить вес (перезаписываем weight)
         if file_path and file_path.lower().endswith('.stl'):
-            full_path = os.path.join(app.config['UPLOAD_FOLDER'], file_path)  # правильный путь
+            full_path = os.path.join(app.config['UPLOAD_FOLDER'], file_path)
             calculated_weight = get_weight_from_stl(full_path)
             if calculated_weight:
                 weight = calculated_weight
@@ -208,14 +237,36 @@ def new_order():
             flash('Необходимо указать вес или загрузить STL-файл для авторасчёта', 'danger')
             clients = Client.query.all()
             materials = Material.query.all()
-            return render_template('order_form.html', order=None, clients=clients, materials=materials)
+            services_list = ServiceParameter.query.filter_by(is_active=True).all()
+            return render_template('order_form.html', order=None, clients=clients, 
+                                  materials=materials, services_list=services_list)
 
-        # Получаем материал и рассчитываем цену
+        # Получаем материал
         material = db.session.get(Material, material_id)
         if not material:
             flash('Материал не найден', 'danger')
             return redirect(url_for('new_order'))
-        total_price = weight * material.price_per_gram
+        
+        # РАСЧЁТ ЦЕНЫ С ИСПОЛЬЗОВАНИЕМ pricing.py 
+        # Создаём временный объект для индивидуальных настроек, если нужно
+        temp_order = None
+        if use_custom_settings:
+            class TempOrder:
+                pass
+            temp_order = TempOrder()
+            temp_order.use_custom_settings = True
+            temp_order.custom_tax_percent = custom_settings.get('tax_percent')
+            temp_order.custom_profit_percent = custom_settings.get('profit_percent')
+            temp_order.custom_consumables_percent = custom_settings.get('consumables_percent')
+            temp_order.custom_depreciation_percent = custom_settings.get('depreciation_percent')
+            temp_order.custom_electricity_cost = custom_settings.get('electricity_cost')
+        
+        # Рассчитываем итоговую цену
+        total_price = calculate_final_price(material_id, weight, temp_order, selected_services)
+        
+        if total_price is None:
+            flash('Ошибка расчёта цены', 'danger')
+            return redirect(url_for('new_order'))
 
         # Создаём заказ
         order = Order(
@@ -225,17 +276,39 @@ def new_order():
             weight=weight,
             file_path=file_path,
             total_price=total_price,
-            status=status
+            status=status,
+            use_custom_settings=use_custom_settings
         )
+        
+        # Сохраняем индивидуальные настройки, если они были
+        if use_custom_settings:
+            order.custom_tax_percent = custom_settings.get('tax_percent')
+            order.custom_profit_percent = custom_settings.get('profit_percent')
+            order.custom_consumables_percent = custom_settings.get('consumables_percent')
+            order.custom_depreciation_percent = custom_settings.get('depreciation_percent')
+            order.custom_electricity_cost = custom_settings.get('electricity_cost')
+        
         db.session.add(order)
-        db.session.flush()  
+        db.session.flush()
+        
+        # Сохраняем выбранные услуги
+        for svc in selected_services:
+            order_service = OrderService(
+                order_id=order.id,
+                service_id=svc['service_id'],
+                custom_value=svc.get('custom_value'),
+                notes=svc.get('notes', '')
+            )
+            db.session.add(order_service)
+        
         log_order_creation(order)
         db.session.commit()
 
-        # Отладочная информация (можно удалить)
+        # Отладочная информация
         print(f"FILE: {file.filename if file else 'None'}")
         print(f"FILE_PATH: {file_path}")
         print(f"WEIGHT: {weight}")
+        print(f"TOTAL_PRICE: {total_price}")
 
         flash('Заказ создан', 'success')
         return redirect(url_for('index'))
@@ -243,34 +316,63 @@ def new_order():
     # GET-запрос
     clients = Client.query.all()
     materials = Material.query.all()
-    return render_template('order_form.html', order=None, clients=clients, materials=materials)
+    services_list = ServiceParameter.query.filter_by(is_active=True).order_by(ServiceParameter.order).all()
+    return render_template('order_form.html', order=None, clients=clients, 
+                          materials=materials, services_list=services_list)
 
 # Редактирование заказа
 @app.route('/order/<int:id>/edit', methods=['GET', 'POST'])
 def edit_order(id):
-    order = Order.query.get_or_404(id)
+    order = db.session.get(Order, id)
+    if not order:
+        abort(404)
+    
     old_data = {
-    'client_id': order.client_id,
-    'model_name': order.model_name,
-    'material_id': order.material_id,
-    'weight': order.weight,
-    'status': order.status,
-    'file_path': order.file_path
+        'client_id': order.client_id,
+        'model_name': order.model_name,
+        'material_id': order.material_id,
+        'weight': order.weight,
+        'status': order.status,
+        'file_path': order.file_path
     }
+    
     if request.method == 'POST':
+        # Обновляем основные поля
         order.client_id = request.form['client_id']
         order.model_name = request.form['model_name']
         order.material_id = request.form['material_id']
-        order.weight = float(request.form['weight'])
         order.status = request.form['status']
+        
+        # Индивидуальные настройки
+        order.use_custom_settings = 'use_custom_settings' in request.form
+        if order.use_custom_settings:
+            order.custom_tax_percent = request.form.get('custom_tax_percent', type=float)
+            order.custom_profit_percent = request.form.get('custom_profit_percent', type=float)
+            order.custom_consumables_percent = request.form.get('custom_consumables_percent', type=float)
+            order.custom_depreciation_percent = request.form.get('custom_depreciation_percent', type=float)
+            order.custom_electricity_cost = request.form.get('custom_electricity_cost', type=float)
+        else:
+            order.custom_tax_percent = None
+            order.custom_profit_percent = None
+            order.custom_consumables_percent = None
+            order.custom_depreciation_percent = None
+            order.custom_electricity_cost = None
+        
+        # Обработка веса из формы
+        weight_str = request.form.get('weight', '')
+        if weight_str:
+            try:
+                order.weight = float(weight_str)
+            except ValueError:
+                flash('Некорректное значение веса', 'danger')
         
         # Обработка нового файла
         file = request.files.get('model_file')
         if file and file.filename:
             if allowed_file(file.filename):
                 if order.file_path:
-                    delete_file(order.file_path)  # удаляем старый файл
-                new_path = save_uploaded_file(file)  # новое имя
+                    delete_file(order.file_path)
+                new_path = save_uploaded_file(file)
                 order.file_path = new_path
                 if new_path and new_path.lower().endswith('.stl'):
                     full_path = os.path.join(app.config['UPLOAD_FOLDER'], new_path)
@@ -279,12 +381,44 @@ def edit_order(id):
                         order.weight = calculated_weight
             else:
                 flash('Недопустимый тип файла. Файл не сохранён.', 'danger')
-
-        # Пересчитываем цену
-        material = db.session.get(Material, order.material_id)
-        order.total_price = order.weight * material.price_per_gram
-
-            # Формируем новые значения
+        
+        # Получаем выбранные услуги
+        selected_services = []
+        service_ids = request.form.getlist('service_ids')
+        for service_id in service_ids:
+            custom_value = request.form.get(f'service_value_{service_id}', type=float)
+            notes = request.form.get(f'service_notes_{service_id}', '')
+            selected_services.append({
+                'service_id': int(service_id),
+                'custom_value': custom_value,
+                'notes': notes
+            })
+        
+        # РАСЧЁТ ЦЕНЫ С ИСПОЛЬЗОВАНИЕМ pricing.py
+        total_price = calculate_final_price(
+            order.material_id, 
+            order.weight, 
+            order if order.use_custom_settings else None,
+            selected_services
+        )
+        
+        if total_price is None:
+            flash('Ошибка расчёта цены', 'danger')
+        else:
+            order.total_price = total_price
+        
+        # Обновляем услуги: удаляем старые и добавляем новые
+        OrderService.query.filter_by(order_id=order.id).delete()
+        for svc in selected_services:
+            order_service = OrderService(
+                order_id=order.id,
+                service_id=svc['service_id'],
+                custom_value=svc.get('custom_value'),
+                notes=svc.get('notes', '')
+            )
+            db.session.add(order_service)
+        
+        # Формируем новые значения для лога
         new_data = {
             'client_id': order.client_id,
             'model_name': order.model_name,
@@ -293,17 +427,32 @@ def edit_order(id):
             'status': order.status,
             'file_path': order.file_path
         }
-
-        # Логируем изменения
+        
         log_order_update(order, old_data, new_data)
-                
         db.session.commit()
+        
         flash('Заказ обновлён', 'success')
         return redirect(url_for('index'))
     
+    # GET-запрос: собираем данные для формы
     clients = Client.query.all()
     materials = Material.query.all()
-    return render_template('order_form.html', order=order, clients=clients, materials=materials)
+    services_list = ServiceParameter.query.filter_by(is_active=True).order_by(ServiceParameter.order).all()
+    
+    # Собираем данные о выбранных услугах для заказа
+    order_services = {}
+    for service in order.services:
+        order_services[service.service_id] = {
+            'custom_value': service.custom_value,
+            'notes': service.notes
+        }
+    
+    return render_template('order_form.html', 
+                          order=order, 
+                          clients=clients, 
+                          materials=materials,
+                          services_list=services_list,
+                          order_services=order_services)
 
 # Удаление заказа
 @app.route('/order/<int:id>/delete')
@@ -311,35 +460,140 @@ def delete_order(id):
     order = db.session.get(Order, id)
     if not order:
         abort(404)
+    
+    # Логируем удаление (лог сохранится в БД)
     log_order_deletion(order)
+    db.session.flush()  # чтобы лог получил id (опционально)
+    
     if order.file_path:
         delete_file(order.file_path)
     
-    # Удаляем заказ из БД
     db.session.delete(order)
     db.session.commit()
     
     flash('Заказ удалён', 'warning')
     return redirect(url_for('index'))
 
+
+# Маршрут для отображения всех логов
+@app.route('/logs')
+def all_logs():
+    page = request.args.get('page', 1, type=int)
+    per_page = 20  # логов на странице
+    
+    logs = OrderLog.query.order_by(OrderLog.timestamp.desc()).paginate(
+        page=page, per_page=per_page, error_out=False
+    )
+    
+    return render_template('all_logs.html', logs=logs)
+
+#Маршрут для очистки старых логов
+@app.route('/clear_old_logs', methods=['POST'])
+def clear_old_logs():
+    try:
+        cutoff_date = datetime.utcnow() - timedelta(days=30)
+        old_logs = OrderLog.query.filter(OrderLog.timestamp < cutoff_date).all()
+        count = len(old_logs)
+        for log in old_logs:
+            db.session.delete(log)
+        db.session.commit()
+        return jsonify({'success': True, 'deleted_count': count})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 # --- AJAX-маршрут для расчёта цены ---
+@app.route('/calculate_price_with_services', methods=['POST'])
+def calculate_price_with_services():
+    import traceback
+    try:
+        data = request.get_json()
+        print("=" * 50)
+        print("Received data:", data)
+        
+        material_id = data.get('material_id')
+        weight = data.get('weight')
+        use_custom = data.get('use_custom', False)
+        services_data = data.get('services', [])
+        
+        print(f"material_id: {material_id}, weight: {weight}, use_custom: {use_custom}")
+        print(f"services_data: {services_data}")
+        
+        # Проверяем обязательные параметры
+        if not material_id:
+            return jsonify({'error': 'Material ID is required'}), 400
+        
+        # Преобразуем вес в число
+        try:
+            if weight is None:
+                return jsonify({'error': 'Weight is required'}), 400
+            weight = float(weight)
+        except (TypeError, ValueError) as e:
+            print(f"Weight conversion error: {e}")
+            return jsonify({'error': 'Invalid weight value'}), 400
+        
+        if weight <= 0:
+            return jsonify({'error': 'Weight must be positive'}), 400
+        
+        # Получаем материал
+        material = db.session.get(Material, material_id)
+        if not material:
+            return jsonify({'error': 'Material not found'}), 404
+        
+        # Создаём временный объект для индивидуальных настроек
+        temp_order = None
+        if use_custom:
+            class TempOrder:
+                pass
+            temp_order = TempOrder()
+            temp_order.use_custom_settings = True
+            # Важно: используем .get() без default, чтобы получить None, если поле отсутствует
+            temp_order.custom_tax_percent = data.get('custom_tax_percent')
+            temp_order.custom_profit_percent = data.get('custom_profit_percent')
+            temp_order.custom_consumables_percent = data.get('custom_consumables_percent')
+            temp_order.custom_depreciation_percent = data.get('custom_depreciation_percent')
+            temp_order.custom_electricity_cost = data.get('custom_electricity_cost')
+            print(f"Custom settings: tax={temp_order.custom_tax_percent}, profit={temp_order.custom_profit_percent}")
+        
+        # Рассчитываем цену
+        price = calculate_final_price(material_id, weight, temp_order, services_data)
+        print(f"Calculated price: {price}")
+        
+        if price is None:
+            return jsonify({'error': 'Failed to calculate price'}), 400
+        
+        # Получаем детальную разбивку (опционально)
+        try:
+            breakdown = calculate_price_breakdown(material_id, weight, temp_order, services_data)
+            print(f"Breakdown: {breakdown}")
+        except Exception as e:
+            print(f"Breakdown error: {e}")
+            breakdown = None
+        
+        return jsonify({
+            'price': price,
+            'breakdown': breakdown
+        })
+        
+    except Exception as e:
+        print("=" * 50)
+        print("ERROR in calculate_price_with_services:")
+        print(traceback.format_exc())
+        print(f"Error: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/calculate_price')
 def calculate_price():
-    # Получаем параметры из запроса (вес и id материала)
     weight = request.args.get('weight', type=float)
     material_id = request.args.get('material_id', type=int)
     
-    # Проверяем, что параметры переданы и корректны
     if not weight or not material_id:
         return jsonify({'error': 'Missing data'}), 400
     
-    material = db.session.get(Material, material_id)
-    if not material:
-        return jsonify({'error': 'Material not found'}), 404
+    price = calculate_final_price(material_id, weight, None, [])
+    if price is None:
+        return jsonify({'error': 'Calculation failed'}), 400
     
-    price = weight * material.price_per_gram
-    # Возвращаем JSON-ответ
-    return jsonify({'price': round(price, 2)})
+    return jsonify({'price': price})
 
 @app.route('/analyze_stl', methods=['POST'])
 def analyze_stl():
@@ -480,6 +734,12 @@ def api_calculate_price():
     final_price = cost_with_tax * (1 + settings.profit_percent / 100)
     
     return jsonify({'price': round(final_price, 2)})
+
+@app.route('/service_settings')
+def service_settings():
+    """Страница управления дополнительными услугами."""
+    services = ServiceParameter.query.order_by(ServiceParameter.order).all()
+    return render_template('service_settings.html', services=services)
 
 # Запуск приложения (только при прямом вызове скрипта)
 if __name__ == '__main__':
